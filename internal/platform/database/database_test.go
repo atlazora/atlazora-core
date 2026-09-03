@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestOpenRejectsInvalidConfigurationWithoutLeakingSecret(t *testing.T) {
@@ -59,5 +62,46 @@ func TestOpenConnectionFailureDoesNotLeakSecret(t *testing.T) {
 
 	if strings.Contains(err.Error(), databaseURL) {
 		t.Fatal("connection error leaked the connection URL")
+	}
+}
+
+// Compile-time assertions keep the shared DBTX boundary compatible with both
+// pooled and transactional pgx execution surfaces.
+var (
+	_ DBTX = (*pgxpool.Pool)(nil)
+	_ DBTX = (pgx.Tx)(nil)
+)
+
+func TestWithinTransactionRejectsNilPool(t *testing.T) {
+	t.Parallel()
+
+	called := false
+
+	err := WithinTransaction(
+		context.Background(),
+		nil,
+		func(context.Context, DBTX) error {
+			called = true
+			return nil
+		},
+	)
+
+	if err == nil {
+		t.Fatal("expected nil pool to be rejected")
+	}
+
+	if called {
+		t.Fatal("transaction callback must not run without a database pool")
+	}
+}
+
+func TestWithinTransactionRejectsNilCallback(t *testing.T) {
+	t.Parallel()
+
+	pool := &pgxpool.Pool{}
+
+	err := WithinTransaction(context.Background(), pool, nil)
+	if err == nil {
+		t.Fatal("expected nil callback to be rejected")
 	}
 }
